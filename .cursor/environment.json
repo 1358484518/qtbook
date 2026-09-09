@@ -1,0 +1,4 @@
+{
+  "name": "qt- Qt/C++ learning environment",
+  "install": "bash .cursor/install.sh"
+}
