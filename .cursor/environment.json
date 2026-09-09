@@ -1,4 +1,4 @@
 {
   "name": "qt- Qt/C++ learning environment",
-  "install": "bash .cursor/install.sh"
+  "install": "sudo apt-get update -y && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential cmake libstdc++-14-dev qt6-base-dev qt6-base-dev-tools qt6-qpa-plugins libgl1-mesa-dev fonts-noto-cjk"
 }
