@@ -46,6 +46,21 @@ qmake qcp_realtime_threaded.pro && make -j
 
 ---
 
+## 工程三：实时动态显示（弹窗滚动）—— `qcp_realtime_live.pro`
+
+真正的**动态显示**：弹出一个窗口，波形随采集持续**滚动刷新**，一直运行到你关闭窗口。
+标题栏实时显示「已采集点数 / 环形窗口内存 / FPS」。基于环形缓冲 + 双线程，
+显示窗口始终是「最近 1000 万点」，随新数据从右侧进入、旧数据从左侧移出。
+
+```bash
+qmake qcp_realtime_live.pro && make -j
+./qcp_realtime_live                      # 实时窗口（持续滚动，关窗即停）
+# 无屏幕时抓帧（用于录制视频），生成 frame_XXXX.png：
+./qcp_realtime_live --record 40 -platform offscreen
+```
+
+---
+
 ## 开启 GPU 加速（可选）
 编辑对应 `.pro`，取消注释：
 ```pro
