@@ -1,40 +1,64 @@
 # QCustomPlot 千万级实时绘制 Demo (Qt5 / qmake)
 
-在同一份 **1000 万点** 数据上对比三种绘制策略,证明「实时刷千万级」的关键是
-**每帧只画 ~像素数量级的点**,而不是依赖某个库。
-
-- **A 基线**：把全部 1000 万点交给 QCustomPlot 自带 min/max 自适应采样 → 正确，但每帧重扫 1000 万。
-- **B 摘要层 + 实时追加**：增量维护「每 256 点一个 min/max 桶」的摘要，每帧追加 5 万新点并只查询 ~2×宽度 个点 → 每帧耗时 O(宽度)，与总量无关，且**保留尖峰**。
-- **C 滚动窗口**：只画最近 5000 个原始点（示波器式）。
+证明「实时刷千万级」的关键是 **每帧只画 ~像素数量级的点**，而不是依赖某个库。
+本目录含两个工程，共用内置的 `qcustomplot.h/.cpp`（QCustomPlot 2.1.1，GPL）。
 
 ## 环境要求
 - Qt **5.14 / 5.15**（widgets + printsupport 模块）
 - 支持 C++17 的编译器
 
-## 构建 & 运行
-```bash
-# 本目录已内置 qcustomplot.h / qcustomplot.cpp (QCustomPlot 2.1.1, GPL)
-qmake            # Qt5 的 qmake，如 /usr/lib/qt5/bin/qmake 或 qmake -qt=5
-make -j
+---
 
-# 有显示器：
-./qcp_realtime_demo
-# 无显示器（服务器）：
-./qcp_realtime_demo -platform offscreen
+## 工程一：基础对比 Demo —— `qcp_realtime_demo.pro`
+
+在同一份 **1000 万点** 数据上对比三种策略：
+
+- **A 基线**：全部 1000 万交给 QCustomPlot 自带 min/max 自适应采样 → 正确，但每帧重扫 1000 万。
+- **B 摘要层 + 实时追加**：增量维护「每 256 点一个 min/max 桶」，每帧追加 5 万新点、只查询 ~2×宽度 个点 → 每帧 O(宽度)，与总量无关，**保留尖峰**。
+- **C 滚动窗口**：只画最近 5000 个原始点。
+
+```bash
+qmake qcp_realtime_demo.pro && make -j
+./qcp_realtime_demo                     # 有屏幕
+./qcp_realtime_demo -platform offscreen # 无屏幕
 ```
-运行后在当前目录生成 A/B/C 三张 PNG，并在终端打印每帧耗时与 FPS。
+实测（Qt5.15，软件渲染）：A ≈ 11ms/帧；**B ≈ 0.44ms/帧**；C ≈ 0.20ms/帧。
+
+---
+
+## 工程二：增强版（环形缓冲 + 双线程）—— `qcp_realtime_threaded.pro`
+
+更接近真实项目的骨架：
+
+- **固定容量环形缓冲**（1000 万）：内存恒定、覆盖最旧，不随采集无限增长；
+- **自动淘汰的 min/max 摘要桶**：旧桶随环形覆盖自动 `pop_front`；
+- **采集线程（QThread）** 持续高速灌数据，与 **GUI 线程 60fps 定时器**（查询 + 重绘）**解耦**，共享数据用 `QMutex` 保护，采集批量加锁降低竞争；
+- 显示窗口始终是「最近 1000 万点」，随数据流动而滚动（10M 规模的示波器式刷新）。
+
+```bash
+qmake qcp_realtime_threaded.pro && make -j
+./qcp_realtime_threaded                     # 有屏幕
+./qcp_realtime_threaded -platform offscreen # 无屏幕
+```
+实测（Qt5.15，软件渲染，运行 ~3s）：
+- 采集线程灌入 **1.04 亿** 样本（~36.6 M/s），**环形缓冲全程恒定 41.3MB / 1000 万点**；
+- 渲染 178 帧，每帧绘制 3200 点，**每帧 ~0.54ms（≈1839 FPS 余量）**。
+
+---
 
 ## 开启 GPU 加速（可选）
-编辑 `qcp_realtime_demo.pro`，取消注释：
+编辑对应 `.pro`，取消注释：
 ```pro
 QT      += opengl
 DEFINES += QCUSTOMPLOT_USE_OPENGL
 ```
 并在代码里 `plot->setOpenGl(true);`。注意 Qt5 的模块名是 `opengl`（Qt6 改成了 `openglwidgets`）。
+软件渲染下已 >1800fps，通常不必开。
 
-## 用到你的项目里
-`MinMaxSummary` 就是「摘要层」的落地实现：
-- `append(y)`：采集回调里每来一个点调用，O(1) 增量维护；
-- `queryFull(width)`：定时器（如 60fps）里调用，返回当前全览所需的 ~2×width 个点，喂给 `graph->data()->set(...)` 后 `replot()`。
+## 接到你的项目里
+- `MinMaxSummary` / `RingPlotBuffer::append*()`：放采集回调，O(1) 增量维护；
+- `queryFull(width)`：放 `QTimer`（60fps）回调，返回 ~2×width 个点后 `graph->data()->set(...)` + `replot()`；
+- 把预填/合成信号换成你的真实采集即可。增强版的 `Acquirer`(QThread) + `RingPlotBuffer`(QMutex) 就是现成的双线程骨架。
 
-把预填 1000 万换成你的真实采集、把基准循环换成 `QTimer` 即可。
+## float 精度提醒（仅自撸 OpenGL 时）
+顶点传 GPU 用 float、而样本索引到千万级会丢精度；平移到大坐标前先减去视口基准偏移再传。QCustomPlot 内部用 double，无此问题。
